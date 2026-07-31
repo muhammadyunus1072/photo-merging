@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Models\ScannedPhoto;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -31,11 +30,6 @@ class OptimizeStudentPhoto implements ShouldQueue
         $originalRelativePath = "{$this->folder}/{$this->filename}";
         $optimizedDirectory = "optimized/{$this->folder}";
         $optimizedRelativePath = "{$optimizedDirectory}/{$this->filename}";
-
-        // if (!$disk->exists($originalRelativePath)) {
-        //     $->update(['status' => 'failed_missing_file']);
-        //     return;
-        // }
 
         try {
             if (!$disk->exists($optimizedDirectory)) {
@@ -80,19 +74,24 @@ class OptimizeStudentPhoto implements ShouldQueue
                 $cropY = (int) round(($origHeight - $cropHeight) / 2);
             }
 
-            // 5. Create a blank canvas using the exact crop dimensions (No downscaling)
+            // 5. Create a blank canvas using the exact crop dimensions
             $destinationImage = imagecreatetruecolor($cropWidth, $cropHeight);
 
-            // Preserve transparency for PNGs and WebP
-            if (in_array($imageType, [IMAGETYPE_PNG, IMAGETYPE_WEBP])) {
-                imagealphablending($destinationImage, false);
-                imagesavealpha($destinationImage, true);
-                $transparent = imagecolorallocatealpha($destinationImage, 255, 255, 255, 127);
-                imagefilledrectangle($destinationImage, 0, 0, $cropWidth, $cropHeight, $transparent);
-            }
+            // ---------------------------------------------------------
+            // PERUBAHAN: Menambahkan Background Solid #0a21fb
+            // HEX #0a21fb = RGB (10, 33, 251)
+            // ---------------------------------------------------------
+            $bgColor = imagecolorallocate($destinationImage, 10, 33, 251);
+
+            // Isi seluruh canvas dengan warna biru tersebut
+            imagefilledrectangle($destinationImage, 0, 0, $cropWidth, $cropHeight, $bgColor);
+
+            // PENTING: Aktifkan Alpha Blending agar saat foto PNG/WebP dicopy, 
+            // area transparannya tidak menghapus background biru yang sudah kita buat.
+            imagealphablending($destinationImage, true);
+            // ---------------------------------------------------------
 
             // 6. Crop onto the new canvas 
-            // By making Destination Width/Height match Source Width/Height, no resizing occurs.
             imagecopyresampled(
                 $destinationImage,
                 $sourceImage,
@@ -106,49 +105,25 @@ class OptimizeStudentPhoto implements ShouldQueue
                 $cropHeight           // Source Width, Height
             );
 
-            // 5. Create a blank canvas for the new optimized image
-            // $destinationImage = imagecreatetruecolor($targetWidth, $targetHeight);
-
-            // Preserve transparency for PNGs and WebP
-            // if (in_array($imageType, [IMAGETYPE_PNG, IMAGETYPE_WEBP])) {
-            //     imagealphablending($destinationImage, false);
-            //     imagesavealpha($destinationImage, true);
-            //     $transparent = imagecolorallocatealpha($destinationImage, 255, 255, 255, 127);
-            //     imagefilledrectangle($destinationImage, 0, 0, $targetWidth, $targetHeight, $transparent);
-            // }
-
-            // 6. Resample, crop, and resize onto the new canvas
-            // imagecopyresampled(
-            //     $destinationImage,
-            //     $sourceImage,
-            //     0,
-            //     0,                             // Destination X, Y
-            //     $cropX,
-            //     $cropY,                   // Source X, Y (the crop offset)
-            //     $targetWidth,
-            //     $targetHeight,      // Destination Width, Height
-            //     $cropWidth,
-            //     $cropHeight           // Source Width, Height (the crop box size)
-            // );
-
             // 7. Save the optimized image to disk
             match ($imageType) {
                 IMAGETYPE_JPEG => imagejpeg($destinationImage, $absoluteDestPath, 80),
-                IMAGETYPE_PNG => imagepng($destinationImage, $absoluteDestPath, 8), // PNG compression is 0-9
+                IMAGETYPE_PNG => imagepng($destinationImage, $absoluteDestPath, 8),
                 IMAGETYPE_WEBP => imagewebp($destinationImage, $absoluteDestPath, 80),
             };
-
-            // 8. CRITICAL: Free up server memory 
-            imagedestroy($sourceImage);
-            imagedestroy($destinationImage);
-
-            // $->update(['status' => 'optimized']);
         } catch (Throwable $e) {
             Log::error("Failed to natively optimize photo ID {$this->filename}: " . $e->getMessage());
-            // $->update(['status' => 'failed_processing']);
 
             // Re-throw if you want the queue worker to retry
             throw $e;
+        } finally {
+            // 8. CRITICAL: Free up server memory (Dipindah ke finally agar anti-hang)
+            if (isset($sourceImage) && $sourceImage instanceof \GdImage) {
+                imagedestroy($sourceImage);
+            }
+            if (isset($destinationImage) && $destinationImage instanceof \GdImage) {
+                imagedestroy($destinationImage);
+            }
         }
     }
 }
